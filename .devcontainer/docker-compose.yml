@@ -1,606 +1,71 @@
-# Licensed to the Apache Software Foundation (ASF) under one
-# or more contributor license agreements.  See the NOTICE file
-# distributed with this work for additional information
-# regarding copyright ownership.  The ASF licenses this file
-# to you under the Apache License, Version 2.0 (the
-# "License"); you may not use this file except in compliance
-# with the License.  You may obtain a copy of the License at
-#
-#   http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing,
-# software distributed under the License is distributed on an
-# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-# KIND, either express or implied.  See the License for the
-# specific language governing permissions and limitations
-# under the License.
-#
+version: '3.8'
 
-# Basic Airflow cluster configuration for CeleryExecutor with Redis and PostgreSQL.
-#
-# WARNING: This configuration is for local development. Do not use it in a production deployment.
-#
-# This configuration supports basic configuration using environment variables or an .env file
-# The following variables are supported:
-#
-# AIRFLOW_IMAGE_NAME         - Docker image name used to run Airflow.
-#                              Default: apache/airflow:master-python3.8
-# AIRFLOW_UID                - User ID in Airflow containers
-#                              Default: 50000
-# AIRFLOW_GID                - Group ID in Airflow containers
-#                              Default: 50000
-# _AIRFLOW_WWW_USER_USERNAME - Username for the administrator account.
-#                              Default: airflow
-# _AIRFLOW_WWW_USER_PASSWORD - Password for the administrator account.
-#                              Default: airflow
-#
-# Feel free to modify this file to suit your needs.
-
-version: '3'
-x-airflow-common:
-	&airflow-common
-	# In order to add custom dependencies or upgrade provider packages you can use your extended image.
-	# Comment the image line, place your Dockerfile in the directory where you placed the docker-compose.yaml
-	# and uncomment the "build" line below, Then run `docker-compose build` to build the images.
-	image: ${AIRFLOW_IMAGE_NAME:-apache/airflow:2.2.0}
-	# build: .
-	environment:
-		&airflow-common-env
-		AIRFLOW__CORE__EXECUTOR: CeleryExecutor
-		AIRFLOW__CORE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
-		AIRFLOW__CELERY__RESULT_BACKEND: db+postgresql://airflow:airflow@postgres/airflow
-		AIRFLOW__CELERY__BROKER_URL: redis://:@redis:6379/0
-		AIRFLOW__CORE__FERNET_KEY: ''
-		AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
-		AIRFLOW__CORE__LOAD_EXAMPLES: 'true'
-		AIRFLOW__API__AUTH_BACKEND: 'airflow.api.auth.backend.basic_auth'
-		_PIP_ADDITIONAL_REQUIREMENTS: ${_PIP_ADDITIONAL_REQUIREMENTS:-}
-	volumes:
-		- ./dags:/opt/airflow/dags
-		- ./logs:/opt/airflow/logs
-		- ./plugins:/opt/airflow/plugins
-	user: "${AIRFLOW_UID:-50000}:0"
-	depends_on:
-		&airflow-common-depends-on
-		redis:
-			condition: service_healthy
-		postgres:
-			condition: service_healthy
-
-# SINGLE SERVICE BEGIN
 services:
-    python:
-        build: .
-        restart: unless-stopped
-        init: true
-        volumes:
-        # You can switch between :cached and :delegated here  
-            - ..:/workspace:delegated
-        # If volume is used
-        #    - workspace-volume:/workspace
-        # Run Docker from Docker
-            - /var/run/docker.sock:/var/run/docker-host.sock
-        ports: 
-            # - 3020:6006
-            # - 3021:8500
-            # - 3022:8501
-        command: sleep infinity
-    fastapi:
-        image: tiangolo/uvicorn-gunicorn-fastapi:python3.8
-        restart: unless-stopped
-        environment: 
-            VARIABLE_NAME: api
-            WORKERS_PER_CORE: 0.5
-            MAX_WORKERS: 24
-        volumes:
-            - ../api/src:/app
-        ports:  
-            - 3024:80
-        links: 
-            - "mysql:db"
-        entrypoint: /start-reload.sh
-        command: /bin/sh -c "pip3 install --user -r requirements.txt"
-    mysql:
-        image: mysql:5.7
-        restart: unless-stopped
-        environment: 
-            MYSQL_DATABASE: mysqldb
-            MYSQL_USER: mysqluser
-            MYSQL_PASSWORD: mysqlpass
-            MYSQL_RANDOM_ROOT_PASSWORD: '1'
-        volumes:
-            - ../mysql:/var/lib/mysql
-    grafana:
-        image: grafana/grafana:latest
-        restart: unless-stopped
-        environment:
-        #    - GF_INSTALL_PLUGINS: []
-        ports:
-            - 3000:3000
-        volumes:
-            - ../grafana/:/var/lib/grafana
-    influxdb:
-        image: influxdb:2.0
-        container_name: influxdb
-        restart: unless-stopped
-        environment: 
-            DOCKER_INFLUXDB_INIT_USERNAME: influxdb
-            DOCKER_INFLUXDB_INIT_PASSWORD: influxpass
-            DOCKER_INFLUXDB_INIT_ORG: influxorg
-            DOCKER_INFLUXDB_INIT_BUCKET: my-bucket
-            # DOCKER_INFLUXDB_INIT_RETENTION: ""
-            # DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: ""
-        ports:
-            - 8086:8086
-        volumes:
-            - ../influxdb/influx:/var/lib/influxdb2
-        networks:
-            - influxdb
-    telegraf:
-        image: telegraf
-        container_name: telegraf
-        restart: unless-stopped
-        volumes:
-            - ../influxdb/telegraf/telegraf.conf:/etc/telegraf/telegraf.conf:ro
-        networks:
-            - influxdb
-    mongodb:
-        image: mongo:5.0
-        restart: unless-stopped
-        ports:
-            - 27017:27017
-        environment:
-            MONGO_INITDB_ROOT_USERNAME: root
-            MONGO_INITDB_ROOT_PASSWORD: crazyMongo
-        volumes:
-            - ../mongodb:/data/db
-            - ../mongodb/cfg:/etc/mongo
-    portainer:
-        image: portainer/portainer-ce:latest
-        restart: unless-stopped
-        volumes:
-            # - \\.\pipe\docker_engine:\\.\pipe\docker_engine
-            - /var/run/docker.sock:/var/run/docker.sock
-            - ../portainer:/data
-            # - portainer-volume:/data
-        ports:
-            - 8000:8000
-            - 9443:9443
-    tensorflow:
-        image: jupyter/tensorflow-notebook
-        restart: unless-stopped
-        ports: 
-            - 3026:8888
-            - 3027:6006
-        volumes:
-            - ../app:/home/jovyan/work
-        environment:
-            JUPYTER_ENABLE_LAB: "yes"
-            GRANT_SUDO: "yes"
-            RESTARTABLE: "yes"
-        entrypoint: start-notebook.sh --NotebookApp.password='' --NotebookApp.token=''
-    nodered:
-    # there is also a node-red:latest-minimal version availible
-        image: nodered/node-red:latest
-        restart: unless-stopped
-        ports:
-            - 1880:1880
-        volumes:
-            - ../nodeRED:/data
-    mosqitto:
-        image: eclipse-mosquitto:latest
-        restart: unless-stopped
-        ports:
-            - 1883:1883
-            - 9001:9001
-        volumes:
-            - ../mqtt/config:/mosquitto/config/
-            - ../mqtt/data:/mosquitto/data/
-            - ../mqtt/logs:/mosquitto/logs/
-    # swagger-editor:
-    #   image: swaggerapi/swagger-editor
-    #   restart: unless-stopped
-    #   ports:
-    #     - "3028:8080"
-    #   volumes:
-    #     - ../api/specs/:/tmp
-    #   environment:
-    #     - SWAGGER_FILE=/tmp/swaggei-sneaks.yaml
-    mailserver:
-        image: analogic/poste.io
-        restart: unless-stopped
-        hostname: mail.example.com
-        ports:
-            - 25:25
-            - 80:80
-            - 110:110
-            - 143:143
-            - 443:443
-            - 465:465
-            - 587:587
-            - 993:993
-            - 995:995
-            - 4190:4190
-        environment:
-            - TZ=Europe/Berlin
-            # - HTTPS=OFF
-            # - HTTP_PORT=8080
-            # - HTTPS_PORT=4433
-            # - DISABLE_CLAMAV=TRUE
-            # - DISABLE_RSPAMD=TRUE
-            # - DISABLE_ROUNDCUBE=TRUE
-        volumes:
-            - /mailserver/data:/data
-# SINGLE SERVICE END
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "2181:2181"
 
-# APACHE AIRFLOW BEGIN          
-    postgres:
-        image: postgres:13
-        environment:
-            POSTGRES_USER: airflow
-            POSTGRES_PASSWORD: airflow
-            POSTGRES_DB: airflow
-        volumes:
-            - ./airflow/db:/var/lib/postgresql/data
-            # - postgres-db-volume::/var/lib/postgresql/data
-        healthcheck:
-            test: ["CMD", "pg_isready", "-U", "airflow"]
-            interval: 5s
-            retries: 5
-        restart: unless-stopped
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
 
-    redis:
-		image: redis:latest
-		expose:
-			- 6379
-		healthcheck:
-			test: ["CMD", "redis-cli", "ping"]
-			interval: 5s
-			timeout: 30s
-			retries: 50
-		restart: unless-stopped
+  kafka-connect:
+    image: confluentinc/cp-kafka-connect:7.5.0
+    depends_on:
+      - kafka
+    ports:
+      - "8083:8083"
+    environment:
+      CONNECT_BOOTSTRAP_SERVERS: kafka:9092
+      CONNECT_REST_PORT: 8083
+      CONNECT_GROUP_ID: "kafka-connect-group"
+      CONNECT_CONFIG_STORAGE_TOPIC: "connect-configs"
+      CONNECT_OFFSET_STORAGE_TOPIC: "connect-offsets"
+      CONNECT_STATUS_STORAGE_TOPIC: "connect-status"
+      CONNECT_KEY_CONVERTER: "org.apache.kafka.connect.json.JsonConverter"
+      CONNECT_VALUE_CONVERTER: "org.apache.kafka.connect.json.JsonConverter"
+      CONNECT_INTERNAL_KEY_CONVERTER: "org.apache.kafka.connect.json.JsonConverter"
+      CONNECT_INTERNAL_VALUE_CONVERTER: "org.apache.kafka.connect.json.JsonConverter"
+      CONNECT_PLUGIN_PATH: "/usr/share/java"
 
-    airflow-webserver:
-		<<: *airflow-common
-		command: webserver
-		ports:
-			- 8080:8080
-		healthcheck:
-			test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
-			interval: 10s
-			timeout: 10s
-			retries: 5
-		restart: unless-stopped
-		depends_on:
-			<<: *airflow-common-depends-on
-			airflow-init:
-				condition: service_completed_successfully
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    depends_on:
+      - kafka
+    ports:
+      - "8080:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
 
-    airflow-scheduler:
-		<<: *airflow-common
-		command: scheduler
-		healthcheck:
-			test: ["CMD-SHELL", 'airflow jobs check --job-type SchedulerJob --hostname "$${HOSTNAME}"']
-			interval: 10s
-			timeout: 10s
-			retries: 5
-		restart: unless-stopped
-		depends_on:
-			<<: *airflow-common-depends-on
-			airflow-init:
-				condition: service_completed_successfully
+  mongodb:
+    image: mongo:6.0
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
 
-    airflow-worker:
-		<<: *airflow-common
-		command: celery worker
-		healthcheck:
-			test:
-				- "CMD-SHELL"
-				- 'celery --app airflow.executors.celery_executor.app inspect ping -d "celery@$${HOSTNAME}"'
-			interval: 10s
-			timeout: 10s
-			retries: 5
-		environment:
-			<<: *airflow-common-env
-			# Required to handle warm shutdown of the celery workers properly
-			# See https://airflow.apache.org/docs/docker-stack/entrypoint.html#signal-propagation
-			DUMB_INIT_SETSID: "0"
-		restart: unless-stopped
-		depends_on:
-			<<: *airflow-common-depends-on
-			airflow-init:
-				condition: service_completed_successfully
+  mongo-express:
+    image: mongo-express:latest
+    depends_on:
+      - mongodb
+    ports:
+      - "8081:8081"
+    environment:
+      ME_CONFIG_MONGODB_SERVER: mongodb
+      ME_CONFIG_MONGODB_PORT: 27017
 
-    airflow-triggerer:
-		<<: *airflow-common
-		command: triggerer
-		healthcheck:
-			test: ["CMD-SHELL", 'airflow jobs check --job-type TriggererJob --hostname "$${HOSTNAME}"']
-			interval: 10s
-			timeout: 10s
-			retries: 5
-		restart: unless-stopped
-		depends_on:
-			<<: *airflow-common-depends-on
-			airflow-init:
-				condition: service_completed_successfully
-
-    airflow-init:
-		<<: *airflow-common
-		entrypoint: /bin/bash
-		# yamllint disable rule:line-length
-		command:
-			- -c
-			- |
-				function ver() {
-					printf "%04d%04d%04d%04d" $${1//./ }
-				}
-				airflow_version=$$(gosu airflow airflow version)
-				airflow_version_comparable=$$(ver $${airflow_version})
-				min_airflow_version=2.2.0
-				min_airflow_version_comparable=$$(ver $${min_airflow_version})
-				if (( airflow_version_comparable < min_airflow_version_comparable )); then
-					echo
-					echo -e "\033[1;31mERROR!!!: Too old Airflow version $${airflow_version}!\e[0m"
-					echo "The minimum Airflow version supported: $${min_airflow_version}. Only use this or higher!"
-					echo
-					exit 1
-				fi
-				if [[ -z "${AIRFLOW_UID}" ]]; then
-					echo
-					echo -e "\033[1;33mWARNING!!!: AIRFLOW_UID not set!\e[0m"
-					echo "If you are on Linux, you SHOULD follow the instructions below to set "
-					echo "AIRFLOW_UID environment variable, otherwise files will be owned by root."
-					echo "For other operating systems you can get rid of the warning with manually created .env file:"
-					echo "    See: https://airflow.apache.org/docs/apache-airflow/stable/start/docker.html#setting-the-right-airflow-user"
-					echo
-				fi
-				one_meg=1048576
-				mem_available=$$(($$(getconf _PHYS_PAGES) * $$(getconf PAGE_SIZE) / one_meg))
-				cpus_available=$$(grep -cE 'cpu[0-9]+' /proc/stat)
-				disk_available=$$(df / | tail -1 | awk '{print $$4}')
-				warning_resources="false"
-				if (( mem_available < 4000 )) ; then
-					echo
-					echo -e "\033[1;33mWARNING!!!: Not enough memory available for Docker.\e[0m"
-					echo "At least 4GB of memory required. You have $$(numfmt --to iec $$((mem_available * one_meg)))"
-					echo
-					warning_resources="true"
-				fi
-				if (( cpus_available < 2 )); then
-					echo
-					echo -e "\033[1;33mWARNING!!!: Not enough CPUS available for Docker.\e[0m"
-					echo "At least 2 CPUs recommended. You have $${cpus_available}"
-					echo
-					warning_resources="true"
-				fi
-				if (( disk_available < one_meg * 10 )); then
-					echo
-					echo -e "\033[1;33mWARNING!!!: Not enough Disk space available for Docker.\e[0m"
-					echo "At least 10 GBs recommended. You have $$(numfmt --to iec $$((disk_available * 1024 )))"
-					echo
-					warning_resources="true"
-				fi
-				if [[ $${warning_resources} == "true" ]]; then
-					echo
-					echo -e "\033[1;33mWARNING!!!: You have not enough resources to run Airflow (see above)!\e[0m"
-					echo "Please follow the instructions to increase amount of resources available:"
-					echo "   https://airflow.apache.org/docs/apache-airflow/stable/start/docker.html#before-you-begin"
-					echo
-				fi
-				mkdir -p /sources/logs /sources/dags /sources/plugins
-				chown -R "${AIRFLOW_UID}:0" /sources/{logs,dags,plugins}
-				exec /entrypoint airflow version
-		# yamllint enable rule:line-length
-		environment:
-			<<: *airflow-common-env
-			_AIRFLOW_DB_UPGRADE: 'true'
-			_AIRFLOW_WWW_USER_CREATE: 'true'
-			_AIRFLOW_WWW_USER_USERNAME: ${_AIRFLOW_WWW_USER_USERNAME:-airflow}
-			_AIRFLOW_WWW_USER_PASSWORD: ${_AIRFLOW_WWW_USER_PASSWORD:-airflow}
-		user: "0:0"
-		volumes:
-			- ./airflow:/sources
-
-    airflow-cli:
-		<<: *airflow-common
-		profiles:
-			- debug
-		environment:
-			<<: *airflow-common-env
-			CONNECTION_CHECK_MAX_COUNT: "0"
-		# Workaround for entrypoint issue. See: https://github.com/apache/airflow/issues/16252
-		command:
-			- bash
-			- -c
-			- airflow
-
-    flower:
-		<<: *airflow-common
-		command: celery flower
-		ports:
-			- 5555:5555
-		healthcheck:
-			test: ["CMD", "curl", "--fail", "http://localhost:5555/"]
-			interval: 10s
-			timeout: 10s
-			retries: 5
-		restart: unless-stopped
-		depends_on:
-			<<: *airflow-common-depends-on
-			airflow-init:
-				condition: service_completed_successfully
-# APACHE AIRFLOW END
-
-# ELASTIC SEARCH BEGIN
-    kibana:
-        #! There is no latest tag here
-        image: docker.elastic.co/kibana/kibana:7.15.1
-        restart: unless-stopped
-        # Searches elastic search instance on http://localhost:9200/
-        ports:
-            - 5601:5601
-        #volumes:
-        networks:
-            - elastic-search
-        depends_on:
-            - elasticsearch
-    elasticsearch:
-        #! There is no latest tag here
-        image: docker.elastic.co/elasticsearch/elasticsearch:7.15.1
-        restart: unless-stopped
-        environment:
-            - discovery.type=single-node
-        ports:
-            - 9300:9300
-            - 9200:9200
-        volumes:
-            - ../elasticsearch/elasticsearch:/usr/share/elasticsearch/data
-        networks:
-            - elastic-search
-    heartbeat:
-        #! There is no latest tag here
-        image: docker.elastic.co/beats/heartbeat:7.15.1
-        command: --strict.perms=false -e
-        restart: unless-stopped
-        environment:
-            - output.elasticsearch.hosts=["elasticsearch:9200"]
-            - setup.kibana.host=kibana:5601
-        #ports:
-        volumes:
-        # Create heartbeat.yml
-            - ../elasticsearch/heartbeat:/usr/share/heartbeat/
-        networks:
-            - elastic-search
-        depends_on:
-            - elasticsearch
-            - kibana
-    logstash:
-        #! There is no latest tag here
-        image: docker.elastic.co/logstash/logstash:7.15.1
-        restart: unless-stopped
-        networks:
-            - elastic-search
-        depends_on:
-            - elasticsearch
-            - kibana
-    auditbeat:
-        #! There is no latest tag here
-        image: docker.elastic.co/beats/auditbeat:7.15.1
-        command: -e --strict.perms=false 
-        cap_add: ['AUDIT_CONTROL', 'AUDIT_READ']
-        # Auditbeat must run in the main process namespace.
-        pid: host
-        volumes:
-            - ../elasticsearch/auditbeat/setup-beat.sh:/usr/local/bin/setup-beat.sh:ro
-        networks:
-            - elastic-search
-        depends_on:
-            - elasticsearch
-            - kibana
-    filebeat:
-        #! There is no latest tag here
-        image: docker.elastic.co/beats/filebeat:7.15.1
-        command: --strict.perms=false -e 
-        environment:
-            - setup.kibana.host=kibana:5601
-            - output.elasticsearch.hosts=["elasticsearch:9200"]
-        # If the host system has logs at "/var/log", mount them at "/mnt/log"
-        # inside the container, where Filebeat can find them.
-        volumes: 
-        #     - /var/log:/mnt/log:ro
-            - ../elasticsearch/filebeat/setup-beat.sh:/usr/local/bin/setup-beat.sh:ro
-        networks:
-            - elastic-search
-        depends_on:
-            - elasticsearch
-            - kibana
-    metricbeat:
-        #! There is no latest tag here
-        image: docker.elastic.co/beats/metricbeat:7.15.1
-        # The commented sections below enable Metricbeat to monitor the Docker host,
-        # rather than the Metricbeat container. It's problematic with Docker for
-        # Windows, however, since "/proc", "/sys" etc. don't exist on Windows.
-        # The same likely applies to OSX (needs testing).
-        # volumes:
-        #   - /proc:/hostfs/proc:ro
-        #   - /sys/fs/cgroup:/hostfs/sys/fs/cgroup:ro
-        #   - /:/hostfs:ro
-        command: --strict.perms=false -e
-        volumes:
-            - ../elasticsearch/metricbeat/setup-beat.sh:/usr/local/bin/setup-beat.sh:ro
-        networks:
-            - elastic-search
-        depends_on:
-            - elasticsearch
-            - kibana
-    packetbeat:
-        #! There is no latest tag here
-        image: docker.elastic.co/beats/packetbeat:7.15.1
-        # Packetbeat needs some elevated privileges to capture network traffic.
-        # We'll grant them with POSIX capabilities.
-        cap_add: ['NET_RAW', 'NET_ADMIN']
-        # Use "host mode" networking to allow Packetbeat to capture traffic from
-        # the real network interface on the host, rather than being isolated to the
-        # container's virtual interface.
-        network_mode: host
-        # Since we did that, Packetbeat is not part of the "elastic-search" Docker network
-        # that the other containers are connected to, and thus can't resolve the
-        # hostname "elasticsearch". Instead, we'll tell it to find Elasticsearch
-        # on "localhost", which is the Docker host machine in this context.
-        command: -e -E 'output.elasticsearch.hosts=["localhost:9200"]' --strict.perms=false
-        volumes:
-            - ../elasticsearch/packetbeat/setup-beat.sh:/usr/local/bin/setup-beat.sh:ro
-        depends_on:
-            - elasticsearch
-            - kibana
-    apm-server:
-        #! There is no latest tag here
-        image: docker.elastic.co/apm/apm-server:7.15.1
-        ports: 
-            - 8200:8200
-        command: --strict.perms=false -e
-        volumes:
-            - ../elasticsearch/apm-server/setup-beat.sh:/usr/local/bin/setup-beat.sh:ro
-        networks:
-            - elastic-search
-        depends_on:
-            - elasticsearch
-            - kibana
-    # journalbeat:
-    #    #! There is no latest tag here
-    #     image: docker.elastic.co/beats/journalbeat:7.15.1
-    #     command: --strict.perms=false -e
-    #     volumes:
-    #        - ../elasticsearch/journalbeat/var/log/journal:/var/log/journal
-    #        - ../elasticsearch/journalbeat/etc/machine-id:/etc/machine-id
-    #        - ../elasticsearch/journalbeat/run/systemd:/run/systemd
-    #        - ../elasticsearch/journalbeat/etc/hostname:/etc/hostname:ro
-    #     networks:
-    #         - elastic-search
-    #     depends_on:
-    #         - elasticsearch
-    #         - kibana
-#
-# docker.elastic.co/observability/apm-agent-java:1.26.0
-# docker.elastic.co/app-search/app-search:7.6.2
-# docker.elastic.co/enterprise-search/enterprise-search:7.15.1
-# docker.elastic.co/beats/elastic-logging-plugin:7.15.1
-# # ELASTIC SEARCH END
-
-####################
-#   NETWORKS
-####################
-
-networks:
-  elastic-search:
-  influxdb:
-
-####################
-#   VOLUMES
-####################
-
-# volumes:
-#     workspace-volume:
-#     postgres-db-volume: # APACHE AIRFLOW
-#     portainer-volume:
+volumes:
+  mongo_data:
